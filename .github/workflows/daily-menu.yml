@@ -1,7 +1,7 @@
 name: Daily menu post
 on:
   schedule:
-    - cron: '0 8 * * 1-5'
+    - cron: '0 7 * * 1-5'
   workflow_dispatch: {}
 # Avoid overlapping runs if a previous run is somehow still going.
 concurrency:
