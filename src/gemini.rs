@@ -1,13 +1,14 @@
-use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
+use worker::wasm_bindgen::JsValue;
+use worker::{Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log};
 
 const MODEL: &str = "gemini-3.1-flash-image-preview";
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 #[derive(Serialize)]
-struct Request<'a> {
+struct GenRequest<'a> {
     contents: Vec<Content<'a>>,
 }
 
@@ -61,51 +62,58 @@ pub async fn generate_image(api_key: &str, day_no: &str, menu_html: &str) -> Res
     );
 
     let url = format!("{ENDPOINT}/{MODEL}:generateContent?key={api_key}");
-    let req = Request {
+    let req = GenRequest {
         contents: vec![Content {
             parts: vec![Part { text: &prompt }],
         }],
     };
+    let json_body = serde_json::to_string(&req)
+        .map_err(|e| Error::RustError(format!("serialize Gemini request: {e}")))?;
 
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .json(&req)
-        .send()
-        .await
-        .context("POST to Gemini failed")?;
+    let mut headers = Headers::new();
+    headers.set("Content-Type", "application/json")?;
 
-    let status = resp.status();
-    let body = resp.text().await.context("read Gemini response body")?;
-    if !status.is_success() {
-        return Err(anyhow!("Gemini returned {status}: {body}"));
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&json_body)));
+    let request = Request::new_with_init(&url, &init)?;
+
+    let mut resp = Fetch::Request(request).send().await?;
+    let status = resp.status_code();
+    let body = resp.text().await?;
+    if !(200..300).contains(&status) {
+        return Err(Error::RustError(format!(
+            "Gemini returned {status}: {body}"
+        )));
     }
 
-    let parsed: Response =
-        serde_json::from_str(&body).context("parse Gemini JSON response")?;
+    let parsed: Response = serde_json::from_str(&body)
+        .map_err(|e| Error::RustError(format!("parse Gemini JSON response: {e}")))?;
 
     let parts = parsed
         .candidates
         .into_iter()
         .next()
-        .ok_or_else(|| anyhow!("Gemini response had no candidates: {body}"))?
+        .ok_or_else(|| Error::RustError(format!("Gemini response had no candidates: {body}")))?
         .content
         .parts;
 
     let mut text_pieces = Vec::new();
     for part in parts {
         if let Some(inline) = part.inline_data {
-            tracing::info!(mime = %inline.mime_type, "gemini returned image");
+            console_log!("gemini returned image (mime {})", inline.mime_type);
             return B64
                 .decode(inline.data)
-                .context("base64-decode Gemini image bytes");
+                .map_err(|e| Error::RustError(format!("base64-decode Gemini image bytes: {e}")));
         }
         if let Some(text) = part.text {
             text_pieces.push(text);
         }
     }
 
-    Err(anyhow!(
+    Err(Error::RustError(format!(
         "Gemini returned no image; text-only response: {}",
         text_pieces.join("\n")
-    ))
+    )))
 }

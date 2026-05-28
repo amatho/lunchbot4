@@ -1,18 +1,19 @@
-use anyhow::{Context, Result, anyhow};
 use regex::Regex;
 use serde_json::Value;
+use worker::{Error, Fetch, Method, Request, Result};
 
 const MENU_URL: &str = "https://tullin.munu.shop/meny";
 
 pub async fn fetch_menu_html() -> Result<String> {
-    let body = reqwest::get(MENU_URL)
-        .await
-        .context("GET tullin.munu.shop/meny failed")?
-        .error_for_status()
-        .context("non-2xx from tullin.munu.shop/meny")?
-        .text()
-        .await
-        .context("read body from tullin.munu.shop/meny")?;
+    let req = Request::new(MENU_URL, Method::Get)?;
+    let mut resp = Fetch::Request(req).send().await?;
+    let status = resp.status_code();
+    if !(200..300).contains(&status) {
+        return Err(Error::RustError(format!(
+            "non-2xx ({status}) from tullin.munu.shop/meny"
+        )));
+    }
+    let body = resp.text().await?;
     extract_menu_html(&body)
 }
 
@@ -29,16 +30,17 @@ fn extract_menu_html(page: &str) -> Result<String> {
         })
         .max_by_key(|m| m.len())
         .ok_or_else(|| {
-            anyhow!(
+            Error::RustError(format!(
                 "could not find a JSON string containing weekday markers in page \
                  ({} bytes); the menu encoding may have changed",
                 page.len()
-            )
+            ))
         })?;
 
     let state_json: String = serde_json::from_str(menu_lit.as_str())
-        .context("decode outer JSON string literal")?;
-    let state: Value = serde_json::from_str(&state_json).context("parse SPA state JSON")?;
+        .map_err(|e| Error::RustError(format!("decode outer JSON string literal: {e}")))?;
+    let state: Value = serde_json::from_str(&state_json)
+        .map_err(|e| Error::RustError(format!("parse SPA state JSON: {e}")))?;
 
     // Within the state, the menu HTML lives in some string field. Find the
     // largest string value that contains all five weekday markers.
@@ -56,8 +58,8 @@ fn extract_menu_html(page: &str) -> Result<String> {
     });
 
     if best.is_empty() {
-        return Err(anyhow!(
-            "no string in SPA state contains all five weekday markers"
+        return Err(Error::RustError(
+            "no string in SPA state contains all five weekday markers".into(),
         ));
     }
     Ok(best)

@@ -1,6 +1,7 @@
-use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use worker::wasm_bindgen::JsValue;
+use worker::{Error, Fetch, Headers, Method, Request, RequestInit, Result};
 
 const POST_MESSAGE: &str = "https://slack.com/api/chat.postMessage";
 
@@ -43,23 +44,35 @@ pub async fn post_image(
             }
         ]),
     };
+    let json_body = serde_json::to_string(&body)
+        .map_err(|e| Error::RustError(format!("serialize Slack body: {e}")))?;
 
-    let resp = reqwest::Client::new()
-        .post(POST_MESSAGE)
-        .bearer_auth(bot_token)
-        .json(&body)
-        .send()
-        .await
-        .context("POST chat.postMessage failed")?
-        .error_for_status()
-        .context("non-2xx from chat.postMessage")?;
+    let mut headers = Headers::new();
+    headers.set("Authorization", &format!("Bearer {bot_token}"))?;
+    headers.set("Content-Type", "application/json")?;
 
-    let parsed: PostResponse = resp.json().await.context("parse Slack response")?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&json_body)));
+    let request = Request::new_with_init(POST_MESSAGE, &init)?;
+
+    let mut resp = Fetch::Request(request).send().await?;
+    let status = resp.status_code();
+    let text = resp.text().await?;
+    if !(200..300).contains(&status) {
+        return Err(Error::RustError(format!(
+            "non-2xx ({status}) from chat.postMessage: {text}"
+        )));
+    }
+
+    let parsed: PostResponse = serde_json::from_str(&text)
+        .map_err(|e| Error::RustError(format!("parse Slack response: {e}")))?;
     if !parsed.ok {
-        return Err(anyhow!(
+        return Err(Error::RustError(format!(
             "slack chat.postMessage failed: {}",
             parsed.error.unwrap_or_else(|| "unknown".into())
-        ));
+        )));
     }
     Ok(parsed.ts.unwrap_or_default())
 }

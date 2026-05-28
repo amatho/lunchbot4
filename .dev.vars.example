@@ -1,0 +1,6 @@
+# Google AI Studio key for Gemini
+GEMINI_API_KEY=
+
+# Slack bot token (scope: chat:write; bot must be a member of SLACK_CHANNEL_ID)
+SLACK_BOT_TOKEN=xoxb-
+SLACK_CHANNEL_ID=C

@@ -1,0 +1,16 @@
+name = "lunchbot4"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-11-01"
+
+[build]
+command = "worker-build --release"
+
+[triggers]
+crons = ["0 7 * * 1-5"]
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "lunchbot4"
+
+[vars]
+R2_PUBLIC_URL_BASE = "https://pub-ff5be7a6fc124e41bfa8f29ab9cb7264.r2.dev"
