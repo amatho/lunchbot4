@@ -28,14 +28,14 @@ pub async fn post_image(
     day_no: &str,
     date_iso: &str,
 ) -> Result<String> {
-    let title = format!("Dagens meny — {day_no} {date_iso}");
+    let title = format!("Dagens meny hos Smaus — {day_no} {date_iso}");
     let body = Body {
         channel,
         text: title.clone(),
         blocks: json!([
             {
                 "type": "section",
-                "text": { "type": "mrkdwn", "text": format!("*Dagens meny* — {day_no} {date_iso}") }
+                "text": { "type": "mrkdwn", "text": format!("*Dagens meny hos <https://tullin.munu.shop/meny|Smaus>* — {day_no} {date_iso}") }
             },
             {
                 "type": "image",
