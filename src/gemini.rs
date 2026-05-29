@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use worker::wasm_bindgen::JsValue;
 use worker::{Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log};
 
-const MODEL: &str = "gemini-3.1-flash-image-preview";
+const MODEL: &str = "gemini-2.5-flash-image";
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 #[derive(Serialize)]
