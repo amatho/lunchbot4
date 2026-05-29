@@ -14,3 +14,7 @@ bucket_name = "lunchbot4"
 
 [vars]
 R2_PUBLIC_URL_BASE = "https://pub-ff5be7a6fc124e41bfa8f29ab9cb7264.r2.dev"
+
+[observability.logs]
+enabled = true
+invocation_logs = true
