@@ -19,6 +19,8 @@ struct Body<'a> {
     channel: &'a str,
     text: String,
     blocks: serde_json::Value,
+    unfurl_links: bool,
+    unfurl_media: bool,
 }
 
 pub async fn post_image(
@@ -35,7 +37,7 @@ pub async fn post_image(
         blocks: json!([
             {
                 "type": "section",
-                "text": { "type": "mrkdwn", "text": format!("*Dagens meny hos <https://tullin.munu.shop/meny|Smaus>* — {day_no} {date_iso}") }
+                "text": { "type": "mrkdwn", "text": format!("*Dagens meny* hos <https://tullin.munu.shop/meny|Smaus> — {day_no} {date_iso}") }
             },
             {
                 "type": "image",
@@ -43,6 +45,8 @@ pub async fn post_image(
                 "alt_text": "Dagens meny"
             }
         ]),
+        unfurl_links: false,
+        unfurl_media: false,
     };
     let json_body = serde_json::to_string(&body)
         .map_err(|e| Error::RustError(format!("serialize Slack body: {e}")))?;
@@ -70,7 +74,7 @@ pub async fn post_image(
         .map_err(|e| Error::RustError(format!("parse Slack response: {e}")))?;
     if !parsed.ok {
         return Err(Error::RustError(format!(
-            "slack chat.postMessage failed: {}",
+            "slack chat.postMessage failed: {} (full response: {text})",
             parsed.error.unwrap_or_else(|| "unknown".into())
         )));
     }
