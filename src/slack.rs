@@ -47,7 +47,7 @@ pub async fn post_image(
     let json_body = serde_json::to_string(&body)
         .map_err(|e| Error::RustError(format!("serialize Slack body: {e}")))?;
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("Authorization", &format!("Bearer {bot_token}"))?;
     headers.set("Content-Type", "application/json")?;
 

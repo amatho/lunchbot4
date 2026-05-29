@@ -70,7 +70,7 @@ pub async fn generate_image(api_key: &str, day_no: &str, menu_html: &str) -> Res
     let json_body = serde_json::to_string(&req)
         .map_err(|e| Error::RustError(format!("serialize Gemini request: {e}")))?;
 
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("Content-Type", "application/json")?;
 
     let mut init = RequestInit::new();
