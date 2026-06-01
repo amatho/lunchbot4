@@ -1,11 +1,23 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use worker::wasm_bindgen::JsValue;
-use worker::{Date, Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log};
+use worker::{
+    Date, Delay, Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log,
+};
 
 const MODEL: &str = "gemini-2.5-flash-image";
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+
+// Retry transient upstream failures (Gemini commonly returns 503 under load).
+// Backoff delays apply between attempts — total worst-case wait is the sum.
+const RETRY_BACKOFFS: &[Duration] = &[Duration::from_secs(1), Duration::from_secs(3)];
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 const STYLE_PROMPTS: &[&str] = &[
     "Vibrant overhead food photography of the dishes plated on a wooden table in natural daylight, realistic textures, shallow depth of field.",
@@ -103,16 +115,13 @@ pub async fn generate_image(
 
     let headers = Headers::new();
     headers.set("Content-Type", "application/json")?;
-
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
         .with_headers(headers)
         .with_body(Some(JsValue::from_str(&json_body)));
     let request = Request::new_with_init(&url, &init)?;
 
-    let mut resp = Fetch::Request(request).send().await?;
-    let status = resp.status_code();
-    let body = resp.text().await?;
+    let (status, body) = post_with_retry(&request, 1).await?;
     if !(200..300).contains(&status) {
         return Err(Error::RustError(format!(
             "Gemini returned {status}: {body}"
@@ -159,5 +168,32 @@ pub async fn generate_image(
         png,
         style_prompt: style,
         menu_text,
+    })
+}
+
+fn post_with_retry<'a>(
+    request: &'a Request,
+    attempt: usize,
+) -> BoxFuture<'a, Result<(u16, String)>> {
+    Box::pin(async move {
+        let mut resp = Fetch::Request(request.clone()?).send().await?;
+        let status = resp.status_code();
+        let body = resp.text().await?;
+
+        let retriable = status == 429 || (500..600).contains(&status);
+        let Some(&backoff) = RETRY_BACKOFFS.get(attempt - 1) else {
+            return Ok((status, body));
+        };
+        if !retriable {
+            return Ok((status, body));
+        }
+
+        console_log!(
+            "Gemini returned {status} on attempt {attempt}/{}; retrying in {}ms",
+            RETRY_BACKOFFS.len() + 1,
+            backoff.as_millis()
+        );
+        Delay::from(backoff).await;
+        post_with_retry(request, attempt + 1).await
     })
 }
