@@ -45,12 +45,12 @@ async fn run(event: ScheduledEvent, env: Env) -> Result<()> {
     let menu_html = scrape::fetch_menu_html().await?;
     console_log!("fetched menu html ({} chars)", menu_html.len());
 
-    let png = gemini::generate_image(&cfg.gemini_api_key, day_no, &menu_html).await?;
-    console_log!("gemini returned image ({} bytes)", png.len());
+    let image = gemini::generate_image(&cfg.gemini_api_key, day_no, &menu_html).await?;
+    console_log!("gemini returned image ({} bytes)", image.png.len());
 
     let key = format!("menu-{date_iso}.png");
     let bucket = env.bucket("BUCKET")?;
-    r2::upload(&bucket, &key, png).await?;
+    r2::upload(&bucket, &key, image.png).await?;
     let url = r2::public_url(&cfg.r2_public_url_base, &key);
     console_log!("uploaded to r2: {key} -> {url}");
 
@@ -60,9 +60,21 @@ async fn run(event: ScheduledEvent, env: Env) -> Result<()> {
         &url,
         day_no,
         &date_iso,
+        &image.menu_text,
     )
     .await?;
     console_log!("posted to slack: {ts}");
+
+    if let Err(e) = slack::post_thread_reply(
+        &cfg.slack_bot_token,
+        &cfg.slack_channel_id,
+        &ts,
+        &format!("Style prompt:\n```{}```", image.style_prompt),
+    )
+    .await
+    {
+        console_error!("failed to post style-prompt thread reply: {e}");
+    }
 
     Ok(())
 }

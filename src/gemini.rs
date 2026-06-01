@@ -2,10 +2,18 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use worker::wasm_bindgen::JsValue;
-use worker::{Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log};
+use worker::{Date, Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log};
 
 const MODEL: &str = "gemini-2.5-flash-image";
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+
+const STYLE_PROMPTS: &[&str] = &[
+    "Vibrant overhead food photography of the dishes plated on a wooden table in natural daylight, realistic textures, shallow depth of field.",
+    "Warm, painterly oil-painting depiction of the dishes arranged on rustic ceramic plates, soft brushstrokes, gallery-art feel.",
+    "Clean studio food photography of each dish individually plated on white ceramic, soft shadows, food-magazine quality.",
+    "Cheerful hand-drawn cartoon illustration of the dishes with bright flat colors, bold outlines, and a playful storybook vibe.",
+    "Moody, dramatic close-up of the dishes against a dark background, rich textures, glossy highlights, fine-dining plating.",
+];
 
 #[derive(Serialize)]
 struct GenRequest<'a> {
@@ -54,11 +62,34 @@ struct InlineData {
     data: String,
 }
 
-pub async fn generate_image(api_key: &str, day_no: &str, menu_html: &str) -> Result<Vec<u8>> {
+pub struct GeneratedImage {
+    pub png: Vec<u8>,
+    pub style_prompt: &'static str,
+    pub menu_text: String,
+}
+
+pub async fn generate_image(
+    api_key: &str,
+    day_no: &str,
+    menu_html: &str,
+) -> Result<GeneratedImage> {
+    let idx = (Date::now().as_millis() as usize) % STYLE_PROMPTS.len();
+    let style = STYLE_PROMPTS[idx];
     let prompt = format!(
-        "Create a picture of today's menu (today is {day_no}) from the following menu, \
-         which is in a very loosely structured HTML format in Norwegian. Use Norwegian \
-         for any text in the image:\n{menu_html}"
+        "Today is {day_no}. The text below is a very loosely structured Norwegian HTML menu.\n\n\
+         Today's menu generally consists of three parts: today's dish (\"Dagens\"), the \
+         vegetarian option (\"Vegetar dagens\"), and a soup (\"Suppe\"). If a part is missing \
+         from the source, omit it rather than inventing one.\n\n\
+         Produce two outputs, in this exact order:\n\
+         1. A clean Norwegian summary of today's dishes only, formatted as Slack mrkdwn. \
+            For each part that is present, write the part name in bold on its own line \
+            (`*Dagens*`, `*Vegetar dagens*`, `*Suppe*`) followed by a bullet line starting \
+            with `• ` describing the dish. No headers, no commentary, no surrounding prose. \
+            Fix obvious typos.\n\
+         2. An illustrative image depicting ONLY the food of today's menu. The image must \
+            contain no text, no labels, no menu boards, no chalkboards, and no signage of any \
+            kind — pure food imagery. Style: {style}\n\n\
+         Menu HTML:\n{menu_html}"
     );
 
     let url = format!("{ENDPOINT}/{MODEL}:generateContent?key={api_key}");
@@ -99,21 +130,34 @@ pub async fn generate_image(api_key: &str, day_no: &str, menu_html: &str) -> Res
         .content
         .parts;
 
-    let mut text_pieces = Vec::new();
+    let mut text_pieces: Vec<String> = Vec::new();
+    let mut png: Option<Vec<u8>> = None;
     for part in parts {
+        if let Some(text) = part.text {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                text_pieces.push(trimmed.to_owned());
+            }
+        }
         if let Some(inline) = part.inline_data {
             console_log!("gemini returned image (mime {})", inline.mime_type);
-            return B64
-                .decode(inline.data)
-                .map_err(|e| Error::RustError(format!("base64-decode Gemini image bytes: {e}")));
-        }
-        if let Some(text) = part.text {
-            text_pieces.push(text);
+            png =
+                Some(B64.decode(inline.data).map_err(|e| {
+                    Error::RustError(format!("base64-decode Gemini image bytes: {e}"))
+                })?);
         }
     }
 
-    Err(Error::RustError(format!(
-        "Gemini returned no image; text-only response: {}",
-        text_pieces.join("\n")
-    )))
+    let menu_text = text_pieces.join("\n");
+    let png = png.ok_or_else(|| {
+        Error::RustError(format!(
+            "Gemini returned no image; text-only response: {menu_text}"
+        ))
+    })?;
+
+    Ok(GeneratedImage {
+        png,
+        style_prompt: style,
+        menu_text,
+    })
 }
