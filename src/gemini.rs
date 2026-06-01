@@ -30,6 +30,14 @@ const STYLE_PROMPTS: &[&str] = &[
 #[derive(Serialize)]
 struct GenRequest<'a> {
     contents: Vec<Content<'a>>,
+    #[serde(rename = "generationConfig")]
+    generation_config: GenerationConfig,
+}
+
+#[derive(Serialize)]
+struct GenerationConfig {
+    #[serde(rename = "responseModalities")]
+    response_modalities: Vec<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -109,6 +117,9 @@ pub async fn generate_image(
         contents: vec![Content {
             parts: vec![Part { text: &prompt }],
         }],
+        generation_config: GenerationConfig {
+            response_modalities: vec!["TEXT", "IMAGE"],
+        },
     };
     let json_body = serde_json::to_string(&req)
         .map_err(|e| Error::RustError(format!("serialize Gemini request: {e}")))?;
