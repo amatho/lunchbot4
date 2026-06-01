@@ -14,8 +14,8 @@ const MODEL: &str = "gemini-2.5-flash-image";
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 // Retry transient upstream failures (Gemini commonly returns 503 under load).
-// Backoff delays apply between attempts — total worst-case wait is the sum.
-const RETRY_BACKOFFS: &[Duration] = &[Duration::from_secs(1), Duration::from_secs(3)];
+const MAX_RETRIES: u32 = 5;
+const BASE_BACKOFF: Duration = Duration::from_secs(2);
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -182,26 +182,20 @@ pub async fn generate_image(
     })
 }
 
-fn post_with_retry<'a>(
-    request: &'a Request,
-    attempt: usize,
-) -> BoxFuture<'a, Result<(u16, String)>> {
+fn post_with_retry<'a>(request: &'a Request, attempt: u32) -> BoxFuture<'a, Result<(u16, String)>> {
     Box::pin(async move {
         let mut resp = Fetch::Request(request.clone()?).send().await?;
         let status = resp.status_code();
         let body = resp.text().await?;
 
         let retriable = status == 429 || (500..600).contains(&status);
-        let Some(&backoff) = RETRY_BACKOFFS.get(attempt - 1) else {
-            return Ok((status, body));
-        };
-        if !retriable {
+        if !retriable || attempt > MAX_RETRIES {
             return Ok((status, body));
         }
 
+        let backoff = BASE_BACKOFF * 2u32.pow(attempt.saturating_sub(1));
         console_log!(
-            "Gemini returned {status} on attempt {attempt}/{}; retrying in {}ms",
-            RETRY_BACKOFFS.len() + 1,
+            "Gemini returned {status} on attempt {attempt}/{MAX_RETRIES}; retrying in {}ms",
             backoff.as_millis()
         );
         Delay::from(backoff).await;
