@@ -12,7 +12,7 @@ const TEXT_MODEL: &str = "gemini-2.5-flash";
 const IMAGE_MODEL: &str = "gemini-2.5-flash-image";
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
-const MAX_RETRIES: u32 = 5;
+const MAX_RETRIES: u32 = 10;
 const BASE_BACKOFF: Duration = Duration::from_secs(2);
 
 const STYLE_PROMPTS: &[&str] = &[
