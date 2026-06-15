@@ -45,7 +45,13 @@ async fn run(event: ScheduledEvent, env: Env) -> Result<()> {
     let menu_html = scrape::fetch_menu_html().await?;
     console_log!("fetched menu html ({} chars)", menu_html.len());
 
-    let image = gemini::generate_image(&cfg.gemini_api_key, day_no, &menu_html).await?;
+    let image = gemini::Gemini {
+        api_key: &cfg.gemini_api_key,
+        cf_account_id: &cfg.cf_account_id,
+        cf_ai_gateway_token: &cfg.cf_ai_gateway_token,
+    }
+    .generate_image(day_no, &menu_html)
+    .await?;
     console_log!("gemini returned image ({} bytes)", image.png.len());
 
     let key = format!("menu-{date_iso}.png");

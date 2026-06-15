@@ -8,9 +8,9 @@ use worker::{
     Date, Delay, Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log,
 };
 
+const GATEWAY_BASE: &str = "https://gateway.ai.cloudflare.com/v1";
 const TEXT_MODEL: &str = "gemini-2.5-flash";
 const IMAGE_MODEL: &str = "gemini-2.5-flash-image";
-const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const MAX_RETRIES: u32 = 10;
 const BASE_BACKOFF: Duration = Duration::from_secs(2);
@@ -84,141 +84,153 @@ pub struct GeneratedImage {
     pub menu_text: String,
 }
 
-pub async fn generate_image(
-    api_key: &str,
-    day_no: &str,
-    menu_html: &str,
-) -> Result<GeneratedImage> {
-    let menu_text = generate_menu_text(api_key, day_no, menu_html).await?;
-    console_log!("gemini returned menu text ({} chars)", menu_text.len());
-
-    let idx = (Date::now().as_millis() as usize) % STYLE_PROMPTS.len();
-    let style = STYLE_PROMPTS[idx];
-    let png = generate_menu_image(api_key, &menu_text, style).await?;
-
-    Ok(GeneratedImage {
-        png,
-        style_prompt: style,
-        menu_text,
-    })
+#[derive(Clone, Copy)]
+pub struct Gemini<'a> {
+    pub api_key: &'a str,
+    pub cf_account_id: &'a str,
+    pub cf_ai_gateway_token: &'a str,
 }
 
-/// Calls `gemini-2.5-flash` to produce the Slack-formatted Norwegian menu summary.
-async fn generate_menu_text(api_key: &str, day_no: &str, menu_html: &str) -> Result<String> {
-    let prompt = format!(
-        "Today is {day_no}. The text below is a very loosely structured Norwegian HTML menu.\n\n\
-         Today's menu generally consists of three parts: today's dish (\"Dagens\"), the \
-         vegetarian option (\"Vegetar dagens\"), and a soup (\"Suppe\"). If a part is missing \
-         from the source, omit it rather than inventing one.\n\n\
-         Produce a clean Norwegian summary of today's dishes only, formatted as Slack mrkdwn. \
-         For each part that is present, write the part name in bold on its own line \
-         (`*Dagens*`, `*Vegetar dagens*`, `*Suppe*`) followed by a bullet line starting \
-         with `• ` describing the dish. No headers, no commentary, no surrounding prose. \
-         Fix obvious typos.\n\n\
-         Menu HTML:\n{menu_html}"
-    );
+impl Gemini<'_> {
+    pub async fn generate_image(&self, day_no: &str, menu_html: &str) -> Result<GeneratedImage> {
+        let menu_text = self.generate_menu_text(day_no, menu_html).await?;
+        console_log!("gemini returned menu text ({} chars)", menu_text.len());
 
-    let request = build_request(api_key, TEXT_MODEL, &prompt, None)?;
-    post_with_retry(&request, |status, body| {
-        if is_transient(status) {
-            return Outcome::Retry;
-        }
-        if !(200..300).contains(&status) {
-            return Outcome::Fatal(format!("Gemini returned {status}: {body}"));
-        }
+        let idx = (Date::now().as_millis() as usize) % STYLE_PROMPTS.len();
+        let style = STYLE_PROMPTS[idx];
+        let png = self.generate_menu_image(&menu_text, style).await?;
 
-        let parts = match first_candidate_parts(body) {
-            Ok(parts) => parts,
-            Err(e) => return Outcome::Fatal(e.to_string()),
-        };
-        let menu_text = parts
-            .into_iter()
-            .filter_map(|p| p.text)
-            .map(|t| t.trim().to_owned())
-            .filter(|t| !t.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
+        Ok(GeneratedImage {
+            png,
+            style_prompt: style,
+            menu_text,
+        })
+    }
 
-        if menu_text.is_empty() {
-            Outcome::Fatal(format!("Gemini returned no menu text: {body}"))
-        } else {
-            Outcome::Done(menu_text)
-        }
-    })
-    .await
-}
+    /// Calls `gemini-2.5-flash` to produce the Slack-formatted Norwegian menu summary.
+    async fn generate_menu_text(&self, day_no: &str, menu_html: &str) -> Result<String> {
+        let prompt = format!(
+            "Today is {day_no}. The text below is a very loosely structured Norwegian HTML menu.\n\n\
+            Today's menu generally consists of three parts: today's dish (\"Dagens\"), the \
+            vegetarian option (\"Vegetar dagens\"), and a soup (\"Suppe\"). If a part is missing \
+            from the source, omit it rather than inventing one.\n\n\
+            Produce a clean Norwegian summary of today's dishes only, formatted as Slack mrkdwn. \
+            For each part that is present, write the part name in bold on its own line \
+            (`*Dagens*`, `*Vegetar dagens*`, `*Suppe*`) followed by a bullet line starting \
+            with `• ` describing the dish. No headers, no commentary, no surrounding prose. \
+            Fix obvious typos.\n\n\
+            Menu HTML:\n{menu_html}"
+        );
 
-/// Calls `gemini-2.5-flash-image` to illustrate the menu. A text-only response
-/// (no image) is treated as a transient failure and retried via the shared
-/// retry loop, so we keep trying until we actually get image bytes back.
-async fn generate_menu_image(api_key: &str, menu_text: &str, style: &str) -> Result<Vec<u8>> {
-    let prompt = format!(
-        "Create an illustrative image depicting ONLY the food of today's lunch menu. \
-         The image must contain no text, no labels, no menu boards, no chalkboards, and no \
-         signage of any kind — pure food imagery. Style: {style}\n\n\
-         Today's menu:\n{menu_text}"
-    );
-
-    let request = build_request(
-        api_key,
-        IMAGE_MODEL,
-        &prompt,
-        Some(GenerationConfig {
-            response_modalities: vec!["TEXT", "IMAGE"],
-        }),
-    )?;
-
-    post_with_retry(&request, |status, body| {
-        if is_transient(status) {
-            return Outcome::Retry;
-        }
-        if !(200..300).contains(&status) {
-            return Outcome::Fatal(format!("Gemini returned {status}: {body}"));
-        }
-
-        let parts = match first_candidate_parts(body) {
-            Ok(parts) => parts,
-            Err(e) => return Outcome::Fatal(e.to_string()),
-        };
-        for part in parts {
-            if let Some(inline) = part.inline_data {
-                console_log!("gemini returned image (mime {})", inline.mime_type);
-                return match B64.decode(inline.data) {
-                    Ok(bytes) => Outcome::Done(bytes),
-                    Err(e) => Outcome::Fatal(format!("base64-decode Gemini image bytes: {e}")),
-                };
+        let request = self.build_request(TEXT_MODEL, &prompt, None)?;
+        post_with_retry(&request, |status, body| {
+            if is_transient(status) {
+                return Outcome::Retry;
             }
-        }
+            if !(200..300).contains(&status) {
+                return Outcome::Fatal(format!("Gemini returned {status}: {body}"));
+            }
 
-        // 2xx but only text, retry to actually get an image.
-        Outcome::Retry
-    })
-    .await
-}
+            let parts = match first_candidate_parts(body) {
+                Ok(parts) => parts,
+                Err(e) => return Outcome::Fatal(e.to_string()),
+            };
+            let menu_text = parts
+                .into_iter()
+                .filter_map(|p| p.text)
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
 
-fn build_request(
-    api_key: &str,
-    model: &str,
-    prompt: &str,
-    generation_config: Option<GenerationConfig>,
-) -> Result<Request> {
-    let url = format!("{ENDPOINT}/{model}:generateContent?key={api_key}");
-    let req = GenRequest {
-        contents: vec![Content {
-            parts: vec![Part { text: prompt }],
-        }],
-        generation_config,
-    };
-    let json_body = serde_json::to_string(&req)
-        .map_err(|e| Error::RustError(format!("serialize Gemini request: {e}")))?;
+            if menu_text.is_empty() {
+                Outcome::Fatal(format!("Gemini returned no menu text: {body}"))
+            } else {
+                Outcome::Done(menu_text)
+            }
+        })
+        .await
+    }
 
-    let headers = Headers::new();
-    headers.set("Content-Type", "application/json")?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(JsValue::from_str(&json_body)));
-    Request::new_with_init(&url, &init)
+    /// Calls `gemini-2.5-flash-image` to illustrate the menu. A text-only response
+    /// (no image) is treated as a transient failure and retried via the shared
+    /// retry loop, so we keep trying until we actually get image bytes back.
+    async fn generate_menu_image(&self, menu_text: &str, style: &str) -> Result<Vec<u8>> {
+        let prompt = format!(
+            "Create an illustrative image depicting ONLY the food of today's lunch menu. \
+            The image must contain no text, no labels, no menu boards, no chalkboards, and no \
+            signage of any kind — pure food imagery. Style: {style}\n\n\
+            Today's menu:\n{menu_text}"
+        );
+
+        let request = self.build_request(
+            IMAGE_MODEL,
+            &prompt,
+            Some(GenerationConfig {
+                response_modalities: vec!["TEXT", "IMAGE"],
+            }),
+        )?;
+
+        post_with_retry(&request, |status, body| {
+            if is_transient(status) {
+                return Outcome::Retry;
+            }
+            if !(200..300).contains(&status) {
+                return Outcome::Fatal(format!("Gemini returned {status}: {body}"));
+            }
+
+            let parts = match first_candidate_parts(body) {
+                Ok(parts) => parts,
+                Err(e) => return Outcome::Fatal(e.to_string()),
+            };
+            for part in parts {
+                if let Some(inline) = part.inline_data {
+                    console_log!("gemini returned image (mime {})", inline.mime_type);
+                    return match B64.decode(inline.data) {
+                        Ok(bytes) => Outcome::Done(bytes),
+                        Err(e) => Outcome::Fatal(format!("base64-decode Gemini image bytes: {e}")),
+                    };
+                }
+            }
+
+            // 2xx but only text, retry to actually get an image.
+            Outcome::Retry
+        })
+        .await
+    }
+
+    fn build_request(
+        &self,
+        model: &str,
+        prompt: &str,
+        generation_config: Option<GenerationConfig>,
+    ) -> Result<Request> {
+        let url = format!(
+            "{GATEWAY_BASE}/{}/default/google-ai-studio/v1beta/models/{model}:generateContent",
+            self.cf_account_id
+        );
+        let req = GenRequest {
+            contents: vec![Content {
+                parts: vec![Part { text: prompt }],
+            }],
+            generation_config,
+        };
+        let json_body = serde_json::to_string(&req)
+            .map_err(|e| Error::RustError(format!("serialize Gemini request: {e}")))?;
+
+        let headers = Headers::new();
+        headers.set("Content-Type", "application/json")?;
+        headers.set("x-goog-api-key", self.api_key)?;
+        headers.set(
+            "cf-aig-authorization",
+            &format!("Bearer {}", self.cf_ai_gateway_token),
+        )?;
+        let mut init = RequestInit::new();
+        init.with_method(Method::Post)
+            .with_headers(headers)
+            .with_body(Some(JsValue::from_str(&json_body)));
+        Request::new_with_init(&url, &init)
+    }
 }
 
 fn first_candidate_parts(body: &str) -> Result<Vec<RespPart>> {

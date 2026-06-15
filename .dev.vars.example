@@ -1,3 +1,6 @@
+# CloudFlare AI Gateway token
+AI_GATEWAY_TOKEN=
+
 # Google AI Studio key for Gemini
 GEMINI_API_KEY=
 

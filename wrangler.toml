@@ -13,6 +13,7 @@ binding = "BUCKET"
 bucket_name = "lunchbot4"
 
 [vars]
+CF_ACCOUNT_ID = "13da59637f0ecbae107358da500dfb30"
 R2_PUBLIC_URL_BASE = "https://pub-ff5be7a6fc124e41bfa8f29ab9cb7264.r2.dev"
 
 [observability.logs]
