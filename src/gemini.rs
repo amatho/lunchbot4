@@ -4,9 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use worker::wasm_bindgen::JsValue;
-use worker::{
-    Date, Delay, Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log,
-};
+use worker::{Delay, Error, Fetch, Headers, Method, Request, RequestInit, Result, console_log};
 
 const GATEWAY_BASE: &str = "https://gateway.ai.cloudflare.com/v1";
 const TEXT_MODEL: &str = "gemini-2.5-flash";
@@ -96,7 +94,7 @@ impl Gemini<'_> {
         let menu_text = self.generate_menu_text(day_no, menu_html).await?;
         console_log!("gemini returned menu text ({} chars)", menu_text.len());
 
-        let idx = (Date::now().as_millis() as usize) % STYLE_PROMPTS.len();
+        let idx = rand::random_range(0..STYLE_PROMPTS.len());
         let style = STYLE_PROMPTS[idx];
         let png = self.generate_menu_image(&menu_text, style).await?;
 
