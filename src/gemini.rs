@@ -10,8 +10,8 @@ const GATEWAY_BASE: &str = "https://gateway.ai.cloudflare.com/v1";
 const TEXT_MODEL: &str = "gemini-2.5-flash";
 const IMAGE_MODEL: &str = "gemini-2.5-flash-image";
 
-const MAX_RETRIES: u32 = 10;
-const BASE_BACKOFF: Duration = Duration::from_secs(2);
+const MAX_RETRIES: u32 = 12;
+const BASE_BACKOFF: u64 = 2;
 
 const STYLE_PROMPTS: &[&str] = &[
     "Vibrant overhead food photography of the dishes plated on a wooden table in natural daylight, realistic textures, shallow depth of field.",
@@ -254,7 +254,7 @@ async fn post_with_retry<T>(
     request: &Request,
     classify: impl Fn(u16, &str) -> Outcome<T>,
 ) -> Result<T> {
-    let mut attempt = 1u32;
+    let mut attempt = 1_u32;
     loop {
         let mut resp = Fetch::Request(request.clone()?).send().await?;
         let status = resp.status_code();
@@ -269,13 +269,12 @@ async fn post_with_retry<T>(
                 )));
             }
             Outcome::Retry => {
-                let backoff = BASE_BACKOFF * 2u32.pow(attempt.saturating_sub(1));
+                let backoff_secs = BASE_BACKOFF.pow(attempt);
                 console_log!(
                     "Gemini attempt {attempt}/{MAX_RETRIES} unsuccessful (status {status}); \
-                     retrying in {}ms",
-                    backoff.as_millis()
+                     retrying in {backoff_secs}s"
                 );
-                Delay::from(backoff).await;
+                Delay::from(Duration::from_secs(backoff_secs)).await;
                 attempt += 1;
             }
         }
